@@ -2,6 +2,7 @@ package box
 
 import (
 	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/route"
 )
 
@@ -25,4 +26,8 @@ func NewEx(options Options) (*BoxEx, error) {
 
 func (b *BoxEx) RouterEx() adapter.RouterEx {
 	return b.routerEx
+}
+
+func (b *BoxEx) LogFactory() log.Factory {
+	return b.logFactory
 }
