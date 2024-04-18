@@ -28,7 +28,7 @@ func NewMod(ctx context.Context, router adapter.Router, logger log.ContextLogger
 	case C.TypeTUIC:
 		return NewTUIC(ctx, router, logger, options.Tag, options.TUICOptions)
 	case C.TypeHysteria2:
-		return NewHysteria2(ctx, router, logger, options.Tag, options.Hysteria2Options)
+		return NewHysteria2M(ctx, router, logger, options.Tag, options.Hysteria2Options)
 	default:
 		return nil, E.New("unknown inbound type: ", options.Type)
 	}

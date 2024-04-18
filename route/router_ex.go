@@ -66,7 +66,7 @@ func (r *RouterEx) DelInbound(tag string) error {
 func (r *RouterEx) UpdateDnsRules(rules []option.DNSRule) error {
 	dnsRules := make([]adapter.DNSRule, 0, len(rules))
 	for i, rule := range rules {
-		dnsRule, err := NewDNSRule(r, r.logger, rule)
+		dnsRule, err := NewDNSRule(r, r.logger, rule, true)
 		if err != nil {
 			return E.Cause(err, "parse dns rule[", i, "]")
 		}

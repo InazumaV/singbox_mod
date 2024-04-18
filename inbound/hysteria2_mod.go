@@ -5,50 +5,37 @@ package inbound
 import (
 	"context"
 	"github.com/sagernet/sing-box/adapter"
-	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
 )
 
-type HysteriaM struct {
+type Hysteria2M struct {
 	userPasswordList []string
-	*Hysteria
+	*Hysteria2
 }
 
-func NewHysteriaM(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options option.HysteriaInboundOptions) (*HysteriaM, error) {
+func NewHysteria2M(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options option.Hysteria2InboundOptions) (*Hysteria2M, error) {
 	userPasswordList := make([]string, 0, len(options.Users))
-	for i := range options.Users {
-		var password string
-		if options.Users[i].AuthString != "" {
-			password = options.Users[i].AuthString
-		} else {
-			password = string(options.Users[i].Auth)
-		}
-		userPasswordList[i] = password
+	for _, user := range options.Users {
+		userPasswordList = append(userPasswordList, user.Password)
 	}
-	h, err := NewHysteria(ctx, router, logger, tag, options)
+	h, err := NewHysteria2(ctx, router, logger, tag, options)
 	if err != nil {
 		return nil, err
 	}
-	return &HysteriaM{
+	return &Hysteria2M{
 		userPasswordList: userPasswordList,
-		Hysteria:         h,
+		Hysteria2:        h,
 	}, nil
 }
 
-func (h *HysteriaM) AddUsers(users []option.HysteriaUser) error {
+func (h *Hysteria2M) AddUsers(users []option.Hysteria2User) error {
 	indexs := make([]int, 0, len(users)+len(h.userNameList))
 	names := make([]string, len(users)+len(h.userNameList))
 	pws := make([]string, len(users)+len(h.userPasswordList))
 	for i := range users {
-		var password string
-		if users[i].AuthString != "" {
-			password = users[i].AuthString
-		} else {
-			password = string(users[i].Auth)
-		}
 		names[i] = users[i].Name
-		pws[i] = password
+		pws[i] = users[i].Password
 	}
 	if cap(h.userNameList)-len(h.userNameList) >= len(users) {
 		h.userNameList = append(h.userNameList, names...)
@@ -69,7 +56,7 @@ func (h *HysteriaM) AddUsers(users []option.HysteriaUser) error {
 	return nil
 }
 
-func (h *HysteriaM) DelUsers(name []string) error {
+func (h *Hysteria2M) DelUsers(name []string) error {
 	if len(name) == 0 {
 		return nil
 	}

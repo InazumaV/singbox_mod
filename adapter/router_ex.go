@@ -8,25 +8,28 @@ import (
 	dns "github.com/sagernet/sing-dns"
 	tun "github.com/sagernet/sing-tun"
 	"github.com/sagernet/sing/common/control"
-	N "github.com/sagernet/sing/common/network"
-	"net"
 	"net/netip"
 )
 
 type RouterEx interface {
 	Service
+	PreStarter
+	PostStarter
 
 	Outbounds() []Outbound
 	Outbound(tag string) (Outbound, bool)
-	DefaultOutbound(network string) Outbound
+	DefaultOutbound(network string) (Outbound, error)
 
 	FakeIPStore() FakeIPStore
 
-	RouteConnection(ctx context.Context, conn net.Conn, metadata InboundContext) error
-	RoutePacketConnection(ctx context.Context, conn N.PacketConn, metadata InboundContext) error
+	ConnectionRouter
 
 	GeoIPReader() *geoip.Reader
 	LoadGeosite(code string) (Rule, error)
+
+	RuleSet(tag string) (RuleSet, bool)
+
+	NeedWIFIState() bool
 
 	Exchange(ctx context.Context, message *mdns.Msg) (*mdns.Msg, error)
 	Lookup(ctx context.Context, domain string, strategy dns.DomainStrategy) ([]netip.Addr, error)
@@ -42,6 +45,7 @@ type RouterEx interface {
 	NetworkMonitor() tun.NetworkUpdateMonitor
 	InterfaceMonitor() tun.DefaultInterfaceMonitor
 	PackageManager() tun.PackageManager
+	WIFIState() WIFIState
 	Rules() []Rule
 
 	ClashServer() ClashServer
