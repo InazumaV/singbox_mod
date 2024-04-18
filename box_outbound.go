@@ -4,12 +4,15 @@ import (
 	"strings"
 
 	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/common/taskmonitor"
+	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing/common"
 	E "github.com/sagernet/sing/common/exceptions"
 	F "github.com/sagernet/sing/common/format"
 )
 
 func (s *Box) startOutbounds() error {
+	monitor := taskmonitor.New(s.logger, C.StartTimeout)
 	outboundTags := make(map[adapter.Outbound]string)
 	outbounds := make(map[string]adapter.Outbound)
 	for i, outboundToStart := range s.outbounds {
@@ -43,8 +46,9 @@ func (s *Box) startOutbounds() error {
 			started[outboundTag] = true
 			canContinue = true
 			if starter, isStarter := outboundToStart.(common.Starter); isStarter {
-				s.logger.Trace("initializing outbound/", outboundToStart.Type(), "[", outboundTag, "]")
+				monitor.Start("initialize outbound/", outboundToStart.Type(), "[", outboundTag, "]")
 				err := starter.Start()
+				monitor.Finish()
 				if err != nil {
 					return E.Cause(err, "initialize outbound/", outboundToStart.Type(), "[", outboundTag, "]")
 				}
@@ -69,7 +73,7 @@ func (s *Box) startOutbounds() error {
 			}
 			problemOutbound := outbounds[problemOutboundTag]
 			if problemOutbound == nil {
-				return E.New("dependency[", problemOutbound, "] not found for outbound[", outboundTags[oCurrent], "]")
+				return E.New("dependency[", problemOutboundTag, "] not found for outbound[", outboundTags[oCurrent], "]")
 			}
 			return lintOutbound(append(oTree, problemOutboundTag), problemOutbound)
 		}

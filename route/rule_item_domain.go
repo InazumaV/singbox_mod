@@ -30,16 +30,23 @@ func NewDomainItem(domains []string, domainSuffixes []string) *DomainItem {
 			description += " "
 		}
 		if dsLen == 1 {
-			description += "domainSuffix=" + domainSuffixes[0]
+			description += "domain_suffix=" + domainSuffixes[0]
 		} else if dsLen > 3 {
-			description += "domainSuffix=[" + strings.Join(domainSuffixes[:3], " ") + "...]"
+			description += "domain_suffix=[" + strings.Join(domainSuffixes[:3], " ") + "...]"
 		} else {
-			description += "domainSuffix=[" + strings.Join(domainSuffixes, " ") + "]"
+			description += "domain_suffix=[" + strings.Join(domainSuffixes, " ") + "]"
 		}
 	}
 	return &DomainItem{
 		domain.NewMatcher(domains, domainSuffixes),
 		description,
+	}
+}
+
+func NewRawDomainItem(matcher *domain.Matcher) *DomainItem {
+	return &DomainItem{
+		matcher,
+		"domain/domain_suffix=<binary>",
 	}
 }
 

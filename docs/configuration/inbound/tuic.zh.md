@@ -22,10 +22,6 @@
 }
 ```
 
-!!! warning ""
-
-    默认安装不包含被 TUI 依赖的 QUIC，参阅 [安装](/zh/#_2)。
-
 ### 监听字段
 
 参阅 [监听字段](/zh/configuration/shared/listen/)。
@@ -48,7 +44,7 @@ TUIC 用户密码
 
 #### congestion_control
 
-QUIC 流量控制算法
+QUIC 拥塞控制算法
 
 可选值: `cubic`, `new_reno`, `bbr`
 

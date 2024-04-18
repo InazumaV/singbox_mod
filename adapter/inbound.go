@@ -46,11 +46,27 @@ type InboundContext struct {
 	SourceGeoIPCode      string
 	GeoIPCode            string
 	ProcessInfo          *process.Info
+	QueryType            uint16
 	FakeIP               bool
 
-	// dns cache
+	// rule cache
 
-	QueryType uint16
+	IPCIDRMatchSource            bool
+	SourceAddressMatch           bool
+	SourcePortMatch              bool
+	DestinationAddressMatch      bool
+	DestinationPortMatch         bool
+	DidMatch                     bool
+	IgnoreDestinationIPCIDRMatch bool
+}
+
+func (c *InboundContext) ResetRuleCache() {
+	c.IPCIDRMatchSource = false
+	c.SourceAddressMatch = false
+	c.SourcePortMatch = false
+	c.DestinationAddressMatch = false
+	c.DestinationPortMatch = false
+	c.DidMatch = false
 }
 
 type inboundContextKey struct{}
@@ -74,4 +90,12 @@ func AppendContext(ctx context.Context) (context.Context, *InboundContext) {
 	}
 	metadata = new(InboundContext)
 	return WithContext(ctx, metadata), metadata
+}
+
+func ExtendContext(ctx context.Context) (context.Context, *InboundContext) {
+	var newMetadata InboundContext
+	if metadata := ContextFrom(ctx); metadata != nil {
+		newMetadata = *metadata
+	}
+	return WithContext(ctx, &newMetadata), &newMetadata
 }

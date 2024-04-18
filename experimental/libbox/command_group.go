@@ -58,7 +58,13 @@ func (c *CommandClient) handleGroupConn(conn net.Conn) {
 }
 
 func (s *CommandServer) handleGroupConn(conn net.Conn) error {
-	defer conn.Close()
+	var interval int64
+	err := binary.Read(conn, binary.BigEndian, &interval)
+	if err != nil {
+		return E.Cause(err, "read interval")
+	}
+	ticker := time.NewTicker(time.Duration(interval))
+	defer ticker.Stop()
 	ctx := connKeepAlive(conn)
 	for {
 		service := s.service
@@ -76,7 +82,7 @@ func (s *CommandServer) handleGroupConn(conn net.Conn) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(2 * time.Second):
+		case <-ticker.C:
 		}
 		select {
 		case <-ctx.Done():
@@ -159,11 +165,7 @@ func readGroups(reader io.Reader) (OutboundGroupIterator, error) {
 
 func writeGroups(writer io.Writer, boxService *BoxService) error {
 	historyStorage := service.PtrFromContext[urltest.HistoryStorage](boxService.ctx)
-	var cacheFile adapter.ClashCacheFile
-	if clashServer := boxService.instance.Router().ClashServer(); clashServer != nil {
-		cacheFile = clashServer.CacheFile()
-	}
-
+	cacheFile := service.FromContext[adapter.CacheFile](boxService.ctx)
 	outbounds := boxService.instance.Router().Outbounds()
 	var iGroups []adapter.OutboundGroup
 	for _, it := range outbounds {
@@ -278,7 +280,6 @@ func (c *CommandClient) SetGroupExpand(groupTag string, isExpand bool) error {
 }
 
 func (s *CommandServer) handleSetGroupExpand(conn net.Conn) error {
-	defer conn.Close()
 	groupTag, err := rw.ReadVString(conn)
 	if err != nil {
 		return err
@@ -288,16 +289,15 @@ func (s *CommandServer) handleSetGroupExpand(conn net.Conn) error {
 	if err != nil {
 		return err
 	}
-	service := s.service
-	if service == nil {
+	serviceNow := s.service
+	if serviceNow == nil {
 		return writeError(conn, E.New("service not ready"))
 	}
-	if clashServer := service.instance.Router().ClashServer(); clashServer != nil {
-		if cacheFile := clashServer.CacheFile(); cacheFile != nil {
-			err = cacheFile.StoreGroupExpand(groupTag, isExpand)
-			if err != nil {
-				return writeError(conn, err)
-			}
+	cacheFile := service.FromContext[adapter.CacheFile](serviceNow.ctx)
+	if cacheFile != nil {
+		err = cacheFile.StoreGroupExpand(groupTag, isExpand)
+		if err != nil {
+			return writeError(conn, err)
 		}
 	}
 	return writeError(conn, nil)

@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"io"
 	"net"
-	"net/http"
 	"os"
 	"sync"
 	"time"
@@ -13,50 +12,91 @@ import (
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing/common"
 	"github.com/sagernet/sing/common/buf"
+	"github.com/sagernet/sing/common/debug"
 	E "github.com/sagernet/sing/common/exceptions"
-	"github.com/sagernet/websocket"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/ws"
+	"github.com/sagernet/ws/wsutil"
 )
 
 type WebsocketConn struct {
-	*websocket.Conn
+	net.Conn
 	*Writer
-	remoteAddr net.Addr
-	reader     io.Reader
+	state          ws.State
+	reader         *wsutil.Reader
+	controlHandler wsutil.FrameHandlerFunc
+	remoteAddr     net.Addr
 }
 
-func NewServerConn(wsConn *websocket.Conn, remoteAddr net.Addr) *WebsocketConn {
+func NewConn(conn net.Conn, remoteAddr net.Addr, state ws.State) *WebsocketConn {
+	controlHandler := wsutil.ControlFrameHandler(conn, state)
 	return &WebsocketConn{
-		Conn:       wsConn,
-		remoteAddr: remoteAddr,
-		Writer:     NewWriter(wsConn, true),
+		Conn:  conn,
+		state: state,
+		reader: &wsutil.Reader{
+			Source:          conn,
+			State:           state,
+			SkipHeaderCheck: !debug.Enabled,
+			OnIntermediate:  controlHandler,
+		},
+		controlHandler: controlHandler,
+		remoteAddr:     remoteAddr,
+		Writer:         NewWriter(conn, state),
 	}
 }
 
 func (c *WebsocketConn) Close() error {
-	err := c.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(C.TCPTimeout))
-	if err != nil {
-		return c.Conn.Close()
+	c.Conn.SetWriteDeadline(time.Now().Add(C.TCPTimeout))
+	frame := ws.NewCloseFrame(ws.NewCloseFrameBody(
+		ws.StatusNormalClosure, "",
+	))
+	if c.state == ws.StateClientSide {
+		frame = ws.MaskFrameInPlace(frame)
 	}
+	ws.WriteFrame(c.Conn, frame)
+	c.Conn.Close()
 	return nil
 }
 
 func (c *WebsocketConn) Read(b []byte) (n int, err error) {
+	var header ws.Header
 	for {
-		if c.reader == nil {
-			_, c.reader, err = c.NextReader()
+		n, err = c.reader.Read(b)
+		if n > 0 {
+			err = nil
+			return
+		}
+		if !E.IsMulti(err, io.EOF, wsutil.ErrNoFrameAdvance) {
+			return
+		}
+		header, err = c.reader.NextFrame()
+		if err != nil {
+			return
+		}
+		if header.OpCode.IsControl() {
+			err = c.controlHandler(header, c.reader)
 			if err != nil {
-				err = wrapError(err)
 				return
 			}
-		}
-		n, err = c.reader.Read(b)
-		if E.IsMulti(err, io.EOF) {
-			c.reader = nil
 			continue
 		}
-		err = wrapError(err)
+		if header.OpCode&ws.OpBinary == 0 {
+			err = c.reader.Discard()
+			if err != nil {
+				return
+			}
+			continue
+		}
+	}
+}
+
+func (c *WebsocketConn) Write(p []byte) (n int, err error) {
+	err = wsutil.WriteMessage(c.Conn, c.state, ws.OpBinary, p)
+	if err != nil {
 		return
 	}
+	n = len(p)
+	return
 }
 
 func (c *WebsocketConn) RemoteAddr() net.Addr {
@@ -83,11 +123,7 @@ func (c *WebsocketConn) NeedAdditionalReadDeadline() bool {
 }
 
 func (c *WebsocketConn) Upstream() any {
-	return c.Conn.NetConn()
-}
-
-func (c *WebsocketConn) UpstreamWriter() any {
-	return c.Writer
+	return c.Conn
 }
 
 type EarlyWebsocketConn struct {
@@ -113,8 +149,7 @@ func (c *EarlyWebsocketConn) writeRequest(content []byte) error {
 	var (
 		earlyData []byte
 		lateData  []byte
-		conn      *websocket.Conn
-		response  *http.Response
+		conn      *WebsocketConn
 		err       error
 	)
 	if len(content) > int(c.maxEarlyData) {
@@ -128,23 +163,26 @@ func (c *EarlyWebsocketConn) writeRequest(content []byte) error {
 		if c.earlyDataHeaderName == "" {
 			requestURL := c.requestURL
 			requestURL.Path += earlyDataString
-			conn, response, err = c.dialer.DialContext(c.ctx, requestURL.String(), c.headers)
+			conn, err = c.dialContext(c.ctx, &requestURL, c.headers)
 		} else {
 			headers := c.headers.Clone()
 			headers.Set(c.earlyDataHeaderName, earlyDataString)
-			conn, response, err = c.dialer.DialContext(c.ctx, c.requestURLString, headers)
+			conn, err = c.dialContext(c.ctx, &c.requestURL, headers)
 		}
 	} else {
-		conn, response, err = c.dialer.DialContext(c.ctx, c.requestURLString, c.headers)
+		conn, err = c.dialContext(c.ctx, &c.requestURL, c.headers)
 	}
 	if err != nil {
-		return wrapDialError(response, err)
+		return err
 	}
-	c.conn = &WebsocketConn{Conn: conn, Writer: NewWriter(conn, false)}
 	if len(lateData) > 0 {
-		_, err = c.conn.Write(lateData)
+		_, err = conn.Write(lateData)
+		if err != nil {
+			return err
+		}
 	}
-	return err
+	c.conn = conn
+	return nil
 }
 
 func (c *EarlyWebsocketConn) Write(b []byte) (n int, err error) {
@@ -153,6 +191,9 @@ func (c *EarlyWebsocketConn) Write(b []byte) (n int, err error) {
 	}
 	c.access.Lock()
 	defer c.access.Unlock()
+	if c.err != nil {
+		return 0, c.err
+	}
 	if c.conn != nil {
 		return c.conn.Write(b)
 	}
@@ -174,6 +215,9 @@ func (c *EarlyWebsocketConn) WriteBuffer(buffer *buf.Buffer) error {
 	if c.conn != nil {
 		return c.conn.WriteBuffer(buffer)
 	}
+	if c.err != nil {
+		return c.err
+	}
 	err := c.writeRequest(buffer.Bytes())
 	c.err = err
 	close(c.create)
@@ -189,14 +233,14 @@ func (c *EarlyWebsocketConn) Close() error {
 
 func (c *EarlyWebsocketConn) LocalAddr() net.Addr {
 	if c.conn == nil {
-		return nil
+		return M.Socksaddr{}
 	}
 	return c.conn.LocalAddr()
 }
 
 func (c *EarlyWebsocketConn) RemoteAddr() net.Addr {
 	if c.conn == nil {
-		return nil
+		return M.Socksaddr{}
 	}
 	return c.conn.RemoteAddr()
 }
@@ -223,14 +267,4 @@ func (c *EarlyWebsocketConn) Upstream() any {
 
 func (c *EarlyWebsocketConn) LazyHeadroom() bool {
 	return c.conn == nil
-}
-
-func wrapError(err error) error {
-	if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
-		return io.EOF
-	}
-	if websocket.IsCloseError(err, websocket.CloseAbnormalClosure) {
-		return net.ErrClosed
-	}
-	return err
 }

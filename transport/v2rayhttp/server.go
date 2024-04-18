@@ -40,10 +40,6 @@ type Server struct {
 	headers    http.Header
 }
 
-func (s *Server) Network() []string {
-	return []string{N.NetworkTCP}
-}
-
 func NewServer(ctx context.Context, options option.V2RayHTTPOptions, tlsConfig tls.ServerConfig, handler adapter.V2RayServerTransportHandler) (*Server, error) {
 	server := &Server{
 		ctx:       ctx,
@@ -56,9 +52,6 @@ func NewServer(ctx context.Context, options option.V2RayHTTPOptions, tlsConfig t
 		path:    options.Path,
 		method:  options.Method,
 		headers: options.Headers.Build(),
-	}
-	if server.method == "" {
-		server.method = "PUT"
 	}
 	if !strings.HasPrefix(server.path, "/") {
 		server.path = "/" + server.path
@@ -89,7 +82,7 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		s.invalidRequest(writer, request, http.StatusNotFound, E.New("bad path: ", request.URL.Path))
 		return
 	}
-	if request.Method != s.method {
+	if s.method != "" && request.Method != s.method {
 		s.invalidRequest(writer, request, http.StatusNotFound, E.New("bad method: ", request.Method))
 		return
 	}
@@ -151,6 +144,10 @@ func (s *Server) invalidRequest(writer http.ResponseWriter, request *http.Reques
 		writer.WriteHeader(statusCode)
 	}
 	s.handler.NewError(request.Context(), E.Cause(err, "process connection from ", request.RemoteAddr))
+}
+
+func (s *Server) Network() []string {
+	return []string{N.NetworkTCP}
 }
 
 func (s *Server) Serve(listener net.Listener) error {

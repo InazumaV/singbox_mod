@@ -9,6 +9,7 @@ import (
 
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/common/tls"
+	"github.com/sagernet/sing-box/common/uot"
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
@@ -44,11 +45,18 @@ func NewTUIC(ctx context.Context, router adapter.Router, logger log.ContextLogge
 			protocol:      C.TypeTUIC,
 			network:       []string{N.NetworkUDP},
 			ctx:           ctx,
-			router:        router,
+			router:        uot.NewRouter(router, logger),
 			logger:        logger,
 			tag:           tag,
 			listenOptions: options.ListenOptions,
 		},
+		tlsConfig: tlsConfig,
+	}
+	var udpTimeout time.Duration
+	if options.UDPTimeout != 0 {
+		udpTimeout = time.Duration(options.UDPTimeout)
+	} else {
+		udpTimeout = C.UDPTimeout
 	}
 	service, err := tuic.NewService[int](tuic.ServiceOptions{
 		Context:           ctx,
@@ -58,6 +66,7 @@ func NewTUIC(ctx context.Context, router adapter.Router, logger log.ContextLogge
 		AuthTimeout:       time.Duration(options.AuthTimeout),
 		ZeroRTTHandshake:  options.ZeroRTTHandshake,
 		Heartbeat:         time.Duration(options.Heartbeat),
+		UDPTimeout:        udpTimeout,
 		Handler:           adapter.NewUpstreamHandler(adapter.InboundContext{}, inbound.newConnection, inbound.newPacketConnection, nil),
 	})
 	if err != nil {
@@ -89,6 +98,7 @@ func NewTUIC(ctx context.Context, router adapter.Router, logger log.ContextLogge
 func (h *TUIC) newConnection(ctx context.Context, conn net.Conn, metadata adapter.InboundContext) error {
 	ctx = log.ContextWithNewID(ctx)
 	metadata = h.createMetadata(conn, metadata)
+	h.logger.InfoContext(ctx, "inbound connection from ", metadata.Source)
 	userID, _ := auth.UserFromContext[int](ctx)
 	if userName := h.userNameList[userID]; userName != "" {
 		metadata.User = userName
@@ -102,6 +112,7 @@ func (h *TUIC) newConnection(ctx context.Context, conn net.Conn, metadata adapte
 func (h *TUIC) newPacketConnection(ctx context.Context, conn N.PacketConn, metadata adapter.InboundContext) error {
 	ctx = log.ContextWithNewID(ctx)
 	metadata = h.createPacketMetadata(conn, metadata)
+	h.logger.InfoContext(ctx, "inbound packet connection from ", metadata.Source)
 	userID, _ := auth.UserFromContext[int](ctx)
 	if userName := h.userNameList[userID]; userName != "" {
 		metadata.User = userName

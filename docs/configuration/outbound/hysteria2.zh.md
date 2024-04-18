@@ -22,9 +22,11 @@
 }
 ```
 
-!!! warning ""
+!!! warning "与官方 Hysteria2 的区别"
 
-    默认安装不包含被 Hysteria2 依赖的 QUIC，参阅 [安装](/zh/#_2)。
+    官方程序支持一种名为 **userpass** 的验证方式，
+    本质上上是将用户名与密码的组合 `<username>:<password>` 作为实际上的密码，而 sing-box 不提供此别名。
+    要将 sing-box 与官方程序一起使用， 您需要填写该组合作为实际密码。
 
 ### 字段
 
@@ -44,7 +46,7 @@
 
 最大带宽。
 
-如果为空，将使用 BBR 流量控制算法而不是 Hysteria CC。
+如果为空，将使用 BBR 拥塞控制算法而不是 Hysteria CC。
 
 #### obfs.type
 

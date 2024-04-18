@@ -11,21 +11,21 @@ import (
 	"time"
 
 	"github.com/sagernet/sing-box/adapter"
-	"github.com/sagernet/sing-box/common/json"
 	"github.com/sagernet/sing-box/common/urltest"
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/experimental"
-	"github.com/sagernet/sing-box/experimental/clashapi/cachefile"
 	"github.com/sagernet/sing-box/experimental/clashapi/trafficontrol"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common"
 	E "github.com/sagernet/sing/common/exceptions"
 	F "github.com/sagernet/sing/common/format"
+	"github.com/sagernet/sing/common/json"
 	N "github.com/sagernet/sing/common/network"
 	"github.com/sagernet/sing/service"
 	"github.com/sagernet/sing/service/filemanager"
-	"github.com/sagernet/websocket"
+	"github.com/sagernet/ws"
+	"github.com/sagernet/ws/wsutil"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/cors"
@@ -48,12 +48,6 @@ type Server struct {
 	mode           string
 	modeList       []string
 	modeUpdateHook chan<- struct{}
-	storeMode      bool
-	storeSelected  bool
-	storeFakeIP    bool
-	cacheFilePath  string
-	cacheID        string
-	cacheFile      adapter.ClashCacheFile
 
 	externalController       bool
 	externalUI               string
@@ -75,9 +69,6 @@ func NewServer(ctx context.Context, router adapter.Router, logFactory log.Observ
 		trafficManager:           trafficManager,
 		modeList:                 options.ModeList,
 		externalController:       options.ExternalController != "",
-		storeMode:                options.StoreMode,
-		storeSelected:            options.StoreSelected,
-		storeFakeIP:              options.StoreFakeIP,
 		externalUIDownloadURL:    options.ExternalUIDownloadURL,
 		externalUIDownloadDetour: options.ExternalUIDownloadDetour,
 	}
@@ -93,18 +84,10 @@ func NewServer(ctx context.Context, router adapter.Router, logFactory log.Observ
 		server.modeList = append([]string{defaultMode}, server.modeList...)
 	}
 	server.mode = defaultMode
-	if options.StoreMode || options.StoreSelected || options.StoreFakeIP || options.ExternalController == "" {
-		cachePath := os.ExpandEnv(options.CacheFile)
-		if cachePath == "" {
-			cachePath = "cache.db"
-		}
-		if foundPath, loaded := C.FindPath(cachePath); loaded {
-			cachePath = foundPath
-		} else {
-			cachePath = filemanager.BasePath(ctx, cachePath)
-		}
-		server.cacheFilePath = cachePath
-		server.cacheID = options.CacheID
+	//goland:noinspection GoDeprecation
+	//nolint:staticcheck
+	if options.StoreMode || options.StoreSelected || options.StoreFakeIP || options.CacheFile != "" || options.CacheID != "" {
+		return nil, E.New("cache_file and related fields in Clash API is deprecated in sing-box 1.8.0, use experimental.cache_file instead.")
 	}
 	cors := cors.New(cors.Options{
 		AllowedOrigins: []string{"*"},
@@ -127,7 +110,7 @@ func NewServer(ctx context.Context, router adapter.Router, logFactory log.Observ
 		r.Mount("/providers/rules", ruleProviderRouter())
 		r.Mount("/script", scriptRouter())
 		r.Mount("/profile", profileRouter())
-		r.Mount("/cache", cacheRouter(router))
+		r.Mount("/cache", cacheRouter(ctx))
 		r.Mount("/dns", dnsRouter(router))
 
 		server.setupMetaAPI(r)
@@ -146,19 +129,13 @@ func NewServer(ctx context.Context, router adapter.Router, logFactory log.Observ
 }
 
 func (s *Server) PreStart() error {
-	if s.cacheFilePath != "" {
-		cacheFile, err := cachefile.Open(s.cacheFilePath, s.cacheID)
-		if err != nil {
-			return E.Cause(err, "open cache file")
-		}
-		s.cacheFile = cacheFile
-		if s.storeMode {
-			mode := s.cacheFile.LoadMode()
-			if common.Any(s.modeList, func(it string) bool {
-				return strings.EqualFold(it, mode)
-			}) {
-				s.mode = mode
-			}
+	cacheFile := service.FromContext[adapter.CacheFile](s.ctx)
+	if cacheFile != nil {
+		mode := cacheFile.LoadMode()
+		if common.Any(s.modeList, func(it string) bool {
+			return strings.EqualFold(it, mode)
+		}) {
+			s.mode = mode
 		}
 	}
 	return nil
@@ -186,7 +163,6 @@ func (s *Server) Close() error {
 	return common.Close(
 		common.PtrOrNil(s.httpServer),
 		s.trafficManager,
-		s.cacheFile,
 		s.urlTestHistory,
 	)
 }
@@ -223,25 +199,14 @@ func (s *Server) SetMode(newMode string) {
 		}
 	}
 	s.router.ClearDNSCache()
-	if s.storeMode {
-		err := s.cacheFile.StoreMode(newMode)
+	cacheFile := service.FromContext[adapter.CacheFile](s.ctx)
+	if cacheFile != nil {
+		err := cacheFile.StoreMode(newMode)
 		if err != nil {
 			s.logger.Error(E.Cause(err, "save mode"))
 		}
 	}
 	s.logger.Info("updated mode: ", newMode)
-}
-
-func (s *Server) StoreSelected() bool {
-	return s.storeSelected
-}
-
-func (s *Server) StoreFakeIP() bool {
-	return s.storeFakeIP
-}
-
-func (s *Server) CacheFile() adapter.ClashCacheFile {
-	return s.cacheFile
 }
 
 func (s *Server) HistoryStorage() *urltest.HistoryStorage {
@@ -314,7 +279,7 @@ func authentication(serverSecret string) func(next http.Handler) http.Handler {
 			}
 
 			// Browser websocket not support custom header
-			if websocket.IsWebSocketUpgrade(r) && r.URL.Query().Get("token") != "" {
+			if r.Header.Get("Upgrade") == "websocket" && r.URL.Query().Get("token") != "" {
 				token := r.URL.Query().Get("token")
 				if token != serverSecret {
 					render.Status(r, http.StatusUnauthorized)
@@ -351,12 +316,6 @@ func hello(redirect bool) func(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool {
-		return true
-	},
-}
-
 type Traffic struct {
 	Up   int64 `json:"up"`
 	Down int64 `json:"down"`
@@ -364,16 +323,17 @@ type Traffic struct {
 
 func traffic(trafficManager *trafficontrol.Manager) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var wsConn *websocket.Conn
-		if websocket.IsWebSocketUpgrade(r) {
+		var conn net.Conn
+		if r.Header.Get("Upgrade") == "websocket" {
 			var err error
-			wsConn, err = upgrader.Upgrade(w, r, nil)
+			conn, _, _, err = ws.UpgradeHTTP(r, w)
 			if err != nil {
 				return
 			}
+			defer conn.Close()
 		}
 
-		if wsConn == nil {
+		if conn == nil {
 			w.Header().Set("Content-Type", "application/json")
 			render.Status(r, http.StatusOK)
 		}
@@ -392,11 +352,11 @@ func traffic(trafficManager *trafficontrol.Manager) func(w http.ResponseWriter, 
 				break
 			}
 
-			if wsConn == nil {
+			if conn == nil {
 				_, err = w.Write(buf.Bytes())
 				w.(http.Flusher).Flush()
 			} else {
-				err = wsConn.WriteMessage(websocket.TextMessage, buf.Bytes())
+				err = wsutil.WriteServerText(conn, buf.Bytes())
 			}
 
 			if err != nil {
@@ -432,16 +392,16 @@ func getLogs(logFactory log.ObservableFactory) func(w http.ResponseWriter, r *ht
 		}
 		defer logFactory.UnSubscribe(subscription)
 
-		var wsConn *websocket.Conn
-		if websocket.IsWebSocketUpgrade(r) {
-			var err error
-			wsConn, err = upgrader.Upgrade(w, r, nil)
+		var conn net.Conn
+		if r.Header.Get("Upgrade") == "websocket" {
+			conn, _, _, err = ws.UpgradeHTTP(r, w)
 			if err != nil {
 				return
 			}
+			defer conn.Close()
 		}
 
-		if wsConn == nil {
+		if conn == nil {
 			w.Header().Set("Content-Type", "application/json")
 			render.Status(r, http.StatusOK)
 		}
@@ -465,11 +425,11 @@ func getLogs(logFactory log.ObservableFactory) func(w http.ResponseWriter, r *ht
 			if err != nil {
 				break
 			}
-			if wsConn == nil {
+			if conn == nil {
 				_, err = w.Write(buf.Bytes())
 				w.(http.Flusher).Flush()
 			} else {
-				err = wsConn.WriteMessage(websocket.TextMessage, buf.Bytes())
+				err = wsutil.WriteServerText(conn, buf.Bytes())
 			}
 
 			if err != nil {

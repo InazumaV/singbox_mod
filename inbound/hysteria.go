@@ -5,6 +5,7 @@ package inbound
 import (
 	"context"
 	"net"
+	"time"
 
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/common/humanize"
@@ -66,6 +67,12 @@ func NewHysteria(ctx context.Context, router adapter.Router, logger log.ContextL
 	} else {
 		receiveBps = uint64(options.DownMbps) * hysteria.MbpsToBps
 	}
+	var udpTimeout time.Duration
+	if options.UDPTimeout != 0 {
+		udpTimeout = time.Duration(options.UDPTimeout)
+	} else {
+		udpTimeout = C.UDPTimeout
+	}
 	service, err := hysteria.NewService[int](hysteria.ServiceOptions{
 		Context:       ctx,
 		Logger:        logger,
@@ -73,6 +80,7 @@ func NewHysteria(ctx context.Context, router adapter.Router, logger log.ContextL
 		ReceiveBPS:    receiveBps,
 		XPlusPassword: options.Obfs,
 		TLSConfig:     tlsConfig,
+		UDPTimeout:    udpTimeout,
 		Handler:       adapter.NewUpstreamHandler(adapter.InboundContext{}, inbound.newConnection, inbound.newPacketConnection, nil),
 
 		// Legacy options
@@ -108,6 +116,7 @@ func NewHysteria(ctx context.Context, router adapter.Router, logger log.ContextL
 func (h *Hysteria) newConnection(ctx context.Context, conn net.Conn, metadata adapter.InboundContext) error {
 	ctx = log.ContextWithNewID(ctx)
 	metadata = h.createMetadata(conn, metadata)
+	h.logger.InfoContext(ctx, "inbound connection from ", metadata.Source)
 	userID, _ := auth.UserFromContext[int](ctx)
 	if userName := h.userNameList[userID]; userName != "" {
 		metadata.User = userName
@@ -121,6 +130,7 @@ func (h *Hysteria) newConnection(ctx context.Context, conn net.Conn, metadata ad
 func (h *Hysteria) newPacketConnection(ctx context.Context, conn N.PacketConn, metadata adapter.InboundContext) error {
 	ctx = log.ContextWithNewID(ctx)
 	metadata = h.createPacketMetadata(conn, metadata)
+	h.logger.InfoContext(ctx, "inbound packet connection from ", metadata.Source)
 	userID, _ := auth.UserFromContext[int](ctx)
 	if userName := h.userNameList[userID]; userName != "" {
 		metadata.User = userName
